@@ -492,7 +492,7 @@ domegadt = zeros(size(omega));
 %     
 % domegadt = domegadt./params.IC1DR.';
 
-c_lyte = 1-params.k*params.total_time;
+c_lyte = 1-params.k*(params.total_time+t);
 
 [k_array, Rxn_array, eta] = R_LLI(params.c_grid_1, c_lyte, mures, rxn_params.k0, ...
     params.rxn_method, params);
