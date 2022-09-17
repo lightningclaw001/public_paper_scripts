@@ -332,8 +332,8 @@ function rxn = R(c, v, muh, mures, params_nondim)
 % rxn = params_nondim.k.*sqrt(c_eff.*(1-c_eff)).*(exp(-alpha*eta)-exp((1-alpha)*eta));
 eta = mures-muh;
 eta_f = mures + log(c) - muh;
-i_red = helper_fun(-eta_f, params_nondim.lambda);
-i_ox = helper_fun(eta_f, params_nondim.lambda);
+i_red = helper_fun(eta_f, params_nondim.lambda);
+i_ox = helper_fun(-eta_f, params_nondim.lambda);
 rxn = params_nondim.k/sqrt(4*pi*params_nondim.lambda)*(1-c-v).*(i_red - c.*i_ox);
 end
 
