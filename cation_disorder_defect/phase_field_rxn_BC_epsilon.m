@@ -1,7 +1,5 @@
 params = {};
 
-%%%create script for running constant current cycling experiments with the defect model
-
 %nondimesionalization parameters;
 params.N_A = 6.02e23; %/mol
 params.kBT = 4.11e-21; %J
@@ -11,34 +9,35 @@ params.R = 0.1e-6; %m, particle size
 params.lambda = 3.78*params.kBT; %units of kBT. Zhang et al 2022
 
 params.cmax = 1.3793e28; % maximum concentration in units of charge; sites/m^3
-params.c0 = 0.4; %nondimensionalized by cmax
+params.c0 = 0.3; %nondimensionalized by cmax
 %params.max_cap = 0.8; %max capacity fraction cycled (0.47/0.42)
-params.max_cap = 2; %max capacity fraction cycled (0.47/0.42)
+params.max_cap = 3; %max capacity fraction cycled (0.47/0.42)
 params.v0 = 0.02; %max vacancy concentration
 params.D_c = 1e-16; %solid diffusivity, m^2/s of standard phase
-params.D_v = 5e-24; %diffusivity of nickel
+params.D_v = 5e-25; %diffusivity of nickel
 params.phi0_oxy = 4.4; %voltage cutoff for formation of oxygen va
 %cutoff for 4.8 V: 0.2601
 %cutoff for 4.6 V: 0.2620
 %cutoff for 4.4 V: 0.2838
 %cutoff for 4.2 V: 0.3629
 
-params.num_cycles = 10;
+params.num_cycles = 100;
 params.k = 8; % reaction rate (A/m^2); CIET parameters from Zhang et al.
 params.k = params.k*6.241e18; %units of charge/(s*m^2)
-params.k_oxy = 1e-5; % reaction rate (A/m^2)
+%params.k_oxy = 7e-7; % reaction rate (A/m^2)
+params.k_oxy = 1e-6; % reaction rate (A/m^2)
 params.k_oxy = params.k_oxy*6.241e18; %units of charge/(s*m^2)
 
 params.m = 200; %number of discretizations in secondary particle
 %discretization
 params.dx = params.R/params.m; %secondary particle
 
-params.control = 1; %C-rate = 0.1. -0.1 is charge. +0.1 is discharge
+params.control = 0.5; %C-rate = 0.1. -0.1 is charge. +0.1 is discharge
 params.control = params.control * 0.53; %since we assume 53% is the max capacity
 
-params.mu_res_low = 4.5;
+params.mu_res_low = 4.;
 params.mu_res_high = 3.75;
-params.cap_res_high = 0.9;
+params.cap_res_high = 1;
 
 disc_radius = linspace(1,0,params.m+1);
 params.vf = disc_radius(1:end-1).^3-disc_radius(2:end).^3;
@@ -117,7 +116,7 @@ for i = 1:params.num_cycles
     params_nondim.mu_end = params_nondim.mu_end_up;
     params_nondim.cap_max = params.c0+params.max_cap;
     opts = odeset('Mass', M, 'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params, params_nondim));
-    IC_0 = fmincon(@(inputs) initial_condition(inputs, M, c_s0, params, params_nondim), -1, [], [], [], [], [], [], [], options);
+    IC_0 = fmincon(@(inputs) initial_condition(inputs, M, c_s0, params, params_nondim), -5, [], [], [], [], [], [], [], options);
     IC = [c_s0; v0; IC_0];
     sol = ode15s(@(t,f) dfdt(t, f, params, params_nondim), [0, params.max_cap/params_nondim.control_abs], IC, opts);
     x = linspace(0, sol.x(end), 80);
@@ -252,12 +251,11 @@ end
 function [value,isterminal,direction] = bounceEvents(t,y,params,params_nondim)
 %end simulation when certain mures is reached
 %y(1)./(1-y(params.c_s_ind+1))-params_nondim.cap_max;
-value = [y(params.mu_res_ind)-params_nondim.mu_end_low;
-    y(params.mu_res_ind)-params_nondim.mu_end_up;
+value = [y(params.mu_res_ind)-params_nondim.mu_end;
     params.vf*y(1:params.c_s_ind) - params.cap_res_high];
 % first one detects cutoff voltage, second one is the filling at the 
-isterminal = [1; 1; 1];   % Stop the integration
-direction = [0; 0; 0];   % Negative direction only
+isterminal = [1; 1];   % Stop the integration
+direction = [0; 0];   % Negative direction only
 end
 
 
@@ -329,11 +327,13 @@ function rxn = R(c, v, muh, mures, params_nondim)
 % alpha = 0.5;
 % % rxn = params_nondim.k.*(165*c_eff.^5 - 752.4*c_eff.^4 + 1241*c_eff.^3 ...
 % %       - 941.7*c_eff.^2 + 325*c_eff - 35.85).*(exp(-alpha*eta)-exp((1-alpha)*eta));
-% rxn = params_nondim.k.*sqrt(c_eff.*(1-c_eff)).*(exp(-alpha*eta)-exp((1-alpha)*eta));
-eta = mures-muh;
-eta_f = mures + log(c) - muh;
-i_red = helper_fun(eta_f, params_nondim.lambda);
-i_ox = helper_fun(-eta_f, params_nondim.lambda);
+% % rxn = params_nondim.k.*sqrt(c_eff.*(1-c_eff)).*(exp(-alpha*eta)-exp((1-alpha)*eta));
+% eta = mures-muh;
+% eta_f = mures + log(c) - muh;
+eta = -(mures-muh);
+eta_f = -(mures + log(c) - muh);
+i_red = helper_fun(-eta_f, params_nondim.lambda);
+i_ox = helper_fun(eta_f, params_nondim.lambda);
 rxn = params_nondim.k/sqrt(4*pi*params_nondim.lambda)*(1-c-v).*(i_red - c.*i_ox);
 end
 
@@ -345,13 +345,54 @@ end
 
 
 function rxn = R_v(mures, oxy, params_nondim)
-eta = (mures-params_nondim.phi0_oxy);
+eta = -(mures-params_nondim.phi0_oxy);
 %this extra negative comes from fucking up a sign somewhere... it's also
 %fucked up in the intercalation, but it got carried over to the algebraic
 %control equation
-rxn = params_nondim.k_oxy.*oxy.*exp(-eta);
+rxn = params_nondim.k_oxy.*oxy.*exp(eta);
 end
 
+
+% function dy = dfdt(t, y, params, params_nondim)
+% %y = c(1..m); c_gb(1..m); mures
+% %assuming homogenuous particles and surface reaction
+% %get flux terms for the particles
+% 
+% %flux condition between grain boundary and particle
+% %we assume k = k*A area
+% %lattice model for diffusion in primary particle
+% radii = linspace(params_nondim.R,0,params.m+1).'; %nondimensional radius
+% radii_mid = (radii(1:end-1)+radii(2:end))/2;
+% 
+% c_s = y(1:params.c_s_ind);
+% v = y(params.c_s_ind+1:params.v_ind);
+% oxy = y(params.oxy_ind);
+% muc = mu_c(c_s, v, params_nondim);
+% %append boundary condition to muv, c_oxy constant
+% muv = mu_v(c_s, v, 1, params_nondim);
+% %we use a "fixed" bc of 50% full outside. this needs to be changed
+% mu_res = y(params.mu_res_ind);
+% 
+% Rxn = R(c_s(1), v(1), muc(1), mu_res, params_nondim);
+% %boundary condition oxygen reaction
+% Rxn_v = R_v(mu_res, oxy, params_nondim);
+% 
+% F_D = -diff(D(c_s, v, params_nondim).*c_s.*(1-v).*muc)/params_nondim.dx;
+% F_v = -diff(params_nondim.D_v.*v.*muv)/params_nondim.dx;
+% %get the boundary fluxes
+% F_bc = Rxn;  
+% F_v_bc = -(-Rxn_v);
+% %we are assuming surface reaction for the big particle
+% F = [F_bc; F_D; 0];
+% F_v = [F_v_bc; F_v; 0];
+% dy(1:params.c_s_ind,1) = -1./radii_mid.^2.*diff(radii.^2.*F)/params_nondim.dx;
+% dy(params.c_s_ind+1:params.v_ind,1) = -1./radii_mid.^2.*diff(radii.^2.*F_v)/params_nondim.dx;
+% dy(params.oxy_ind,1) = -Rxn_v*(4/3*pi*(radii(1)^3-radii(2)^3))./params_nondim.dx; 
+% %first term is the same as prevoius
+% 
+% %last term is an algebraic equation
+% dy(params.mu_res_ind,1) = -params_nondim.control;
+% end
 
 function dy = dfdt(t, y, params, params_nondim)
 %y = c(1..m); c_gb(1..m); mures
@@ -378,9 +419,10 @@ Rxn = R(c_s(1), v(1), muc(1), mu_res, params_nondim);
 Rxn_v = R_v(mu_res, oxy, params_nondim);
 
 F_D = -diff(D(c_s, v, params_nondim).*c_s.*(1-v).*muc)/params_nondim.dx;
+%F_D = -diff(D(c_s, v, params_nondim).*c_s.*muc)/params_nondim.dx;
 F_v = -diff(params_nondim.D_v.*v.*muv)/params_nondim.dx;
 %get the boundary fluxes
-F_bc = -Rxn;  
+F_bc = Rxn;  
 F_v_bc = -(-Rxn_v);
 %we are assuming surface reaction for the big particle
 F = [F_bc; F_D; 0];
@@ -388,8 +430,10 @@ F_v = [F_v_bc; F_v; 0];
 dy(1:params.c_s_ind,1) = -1./radii_mid.^2.*diff(radii.^2.*F)/params_nondim.dx;
 dy(params.c_s_ind+1:params.v_ind,1) = -1./radii_mid.^2.*diff(radii.^2.*F_v)/params_nondim.dx;
 dy(params.oxy_ind,1) = -Rxn_v*(4/3*pi*(radii(1)^3-radii(2)^3))./params_nondim.dx; 
+
 %first term is the same as prevoius
 
 %last term is an algebraic equation
 dy(params.mu_res_ind,1) = -params_nondim.control;
 end
+
