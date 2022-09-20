@@ -1,8 +1,5 @@
 params = {};
 
-
-%%% create script for constant voltage hold simulations
-
 %nondimesionalization parameters;
 params.N_A = 6.02e23; %/mol
 params.kBT = 4.11e-21; %J
@@ -14,11 +11,11 @@ params.lambda = 3.78*params.kBT; %units of kBT. Zhang et al 2022
 %we assume max capacity is 53%
 
 params.cmax = 1.3793e28; % maximum concentration in units of charge; sites/m^3
-params.c0 = 0.26; %nondimensionalized by cmax
+params.c0 = 0.3; %nondimensionalized by cmax
 params.max_cap = 0.5; %max capacity fraction cycled (0.47/0.42)
 params.v0 = 0.02; %max vacancy concentration
 params.D_c = 1e-16; %solid diffusivity, m^2/s of standard phase
-params.D_v = 5e-24; %diffusivity of nickel
+params.D_v = 5e-25; %diffusivity of nickel
 params.phi0_oxy = 4.4; %voltage cutoff for formation of oxygen va
 %cutoff for 4.8 V: 0.2601
 %cutoff for 4.6 V: 0.2620
@@ -28,7 +25,7 @@ params.phi0_oxy = 4.4; %voltage cutoff for formation of oxygen va
 params.num_cycles = 3;
 params.k = 8; % reaction rate (A/m^2); CIET parameters from Zhang et al.
 params.k = params.k*6.241e18; %units of charge/(s*m^2)
-params.k_oxy = 1e-5; % reaction rate (A/m^2)
+params.k_oxy = 1e-6; % reaction rate (A/m^2)
 params.k_oxy = params.k_oxy*6.241e18; %units of charge/(s*m^2)
 params.mu_res = 4.2; % eV
 
@@ -116,7 +113,7 @@ for i = 1:params.num_cycles
     params_nondim.control = -params_nondim.control_abs;
     params_nondim.mu_end = params_nondim.mu_end_up;
     params_nondim.cap_max = params.c0+params.max_cap;
-    opts = odeset('Mass', M, 'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params, params_nondim));
+    opts = odeset('Mass', M, 'RelTol', 1e-7, 'AbsTol', 1e-7, 'Events', @(t,y) bounceEvents(t, y, params, params_nondim));
     IC_0 = fmincon(@(inputs) initial_condition(inputs, M, c_s0, params, params_nondim), -1, [], [], [], [], [], [], [], options);
     IC = [c_s0; v0; real(IC_0)];
     sol = ode15s(@(t,f) dfdt(t, f, params, params_nondim), [0, params.max_cap/params_nondim.control_abs], IC, opts);
@@ -135,7 +132,7 @@ for i = 1:params.num_cycles
     params_nondim.control = params_nondim.control_abs;
     params_nondim.mu_end = params_nondim.mu_end_low;
     params_nondim.cap_max = params.c0;
-    opts = odeset('Mass', M, 'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params, params_nondim));
+    opts = odeset('Mass', M, 'RelTol', 1e-7, 'AbsTol', 1e-7, 'Events', @(t,y) bounceEvents(t, y, params, params_nondim));
     IC_0 = fmincon(@(inputs) initial_condition(inputs, M, c_s0, params, params_nondim), 30, [], [], [], [], [], [], [], options);
     IC = [c_s0; v0; real(IC_0)];
     sol = ode15s(@(t,f) dfdt(t, f, params, params_nondim), [0, params.max_cap/params_nondim.control_abs], IC, opts);
@@ -345,11 +342,13 @@ function rxn = R(c, v, muh, mures, params_nondim)
 % alpha = 0.5;
 % % rxn = params_nondim.k.*(165*c_eff.^5 - 752.4*c_eff.^4 + 1241*c_eff.^3 ...
 % %       - 941.7*c_eff.^2 + 325*c_eff - 35.85).*(exp(-alpha*eta)-exp((1-alpha)*eta));
-% rxn = params_nondim.k.*sqrt(c_eff.*(1-c_eff)).*(exp(-alpha*eta)-exp((1-alpha)*eta));
-eta = mures-muh;
-eta_f = mures + log(c) - muh;
-i_red = helper_fun(eta_f, params_nondim.lambda);
-i_ox = helper_fun(-eta_f, params_nondim.lambda);
+% % rxn = params_nondim.k.*sqrt(c_eff.*(1-c_eff)).*(exp(-alpha*eta)-exp((1-alpha)*eta));
+% eta = mures-muh;
+% eta_f = mures + log(c) - muh;
+eta = -(mures-muh);
+eta_f = -(mures + log(c) - muh);
+i_red = helper_fun(-eta_f, params_nondim.lambda);
+i_ox = helper_fun(eta_f, params_nondim.lambda);
 rxn = params_nondim.k/sqrt(4*pi*params_nondim.lambda)*(1-c-v).*(i_red - c.*i_ox);
 end
 
@@ -361,11 +360,11 @@ end
 
 
 function rxn = R_v(mures, oxy, params_nondim)
-eta = (mures-params_nondim.phi0_oxy);
+eta = -(mures-params_nondim.phi0_oxy);
 %this extra negative comes from fucking up a sign somewhere... it's also
 %fucked up in the intercalation, but it got carried over to the algebraic
 %control equation
-rxn = params_nondim.k_oxy.*oxy.*exp(-eta);
+rxn = params_nondim.k_oxy.*oxy.*exp(eta);
 end
 
 
@@ -396,7 +395,7 @@ Rxn_v = R_v(mu_res, oxy, params_nondim);
 F_D = -diff(D(c_s, v, params_nondim).*c_s.*muc)/params_nondim.dx;
 F_v = -diff(params_nondim.D_v.*v.*muv)/params_nondim.dx;
 %get the boundary fluxes
-F_bc = -Rxn;  
+F_bc = Rxn;  
 F_v_bc = -(-Rxn_v);
 %we are assuming surface reaction for the big particle
 F = [F_bc; F_D; 0];
@@ -436,7 +435,7 @@ F_D = -diff(D(c_s, v, params_nondim).*c_s.*(1-v).*muc)/params_nondim.dx;
 %F_D = -diff(D(c_s, v, params_nondim).*c_s.*muc)/params_nondim.dx;
 F_v = -diff(params_nondim.D_v.*v.*muv)/params_nondim.dx;
 %get the boundary fluxes
-F_bc = -Rxn;  
+F_bc = Rxn;  
 F_v_bc = -(-Rxn_v);
 %we are assuming surface reaction for the big particle
 F = [F_bc; F_D; 0];
@@ -444,6 +443,7 @@ F_v = [F_v_bc; F_v; 0];
 dy(1:params.c_s_ind,1) = -1./radii_mid.^2.*diff(radii.^2.*F)/params_nondim.dx;
 dy(params.c_s_ind+1:params.v_ind,1) = -1./radii_mid.^2.*diff(radii.^2.*F_v)/params_nondim.dx;
 dy(params.oxy_ind,1) = -Rxn_v*(4/3*pi*(radii(1)^3-radii(2)^3))./params_nondim.dx; 
+
 %first term is the same as prevoius
 
 %last term is an algebraic equation
