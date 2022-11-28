@@ -81,7 +81,7 @@ rxn_params.D0 = 5e-2;
 %rxn_params.k0 = 25/50;
 rxn_params.k0 = 10;
 % rxn_params.k0_res = 0.1e-4
-rxn_params.k0_res = 1e-4;
+rxn_params.k0_res = 0.2e-3;
 rxn_params.alpha = 0.5;
 
 
@@ -90,7 +90,7 @@ rxn_params.alpha = 0.5;
 
 
 
-function [value,isterminal,direction] = bounceEvents(t,y,yp,params)
+function [value,isterminal,direction] = bounceEvents(t,y,params)
 %end simulation when certain mures is reached
 %y(1)./(1-y(params.c_s_ind+1))-params_nondim.cap_max;
 value = [y(end)-params.lower_volt;
@@ -186,7 +186,7 @@ OCV = (5.314735633000300E+00 +...
 - 8.297904604107030E+02*x.^6.0 - 2.073765547574810E+03*x.^5.0...
 + 1.190223421193310E+03*x.^4.0 - 2.724851668445780E+02*x.^3.0...
 + 2.723409218042130E+01*x.^2.0 - 4.158276603609060E+00*x +...
--5.573191762723310E-04*exp(6.560240842659690E+00*x.^4.148209275061330E+01)) - log(x./(1-x)).*heaviside(x-0.97);
+-5.573191762723310E-04*exp(6.560240842659690E+00*x.^4.148209275061330E+01));
 end
 
 
@@ -222,7 +222,7 @@ switch rxn_method
     case "BV"
         %using the transition state rxn model
         rxn = k_array.*(1-c).*(c./(1-c)).^alpha.*(exp(-alpha*eta)-...
-            exp((1-alpha)*eta));
+            exp((1-alpha)*eta)).*(tanh(-((abs(eta))-6))+1)/2;
         if isa(eta,'casadi.MX') || isa(eta,'casadi.SX')
             eta = if_else(eta==0,1e-16,eta);
         else
@@ -272,7 +272,7 @@ end
 
 
 
-function out = dideta(c_grid, mures, k0, rxn_method, params)
+function out = dideta(c_grid, mures, k0, rxn_method, params, Rxn_val)
 alpha = 0.5;
 c = c_grid.';
 muh = mu_c(c_grid, params).';
@@ -282,7 +282,7 @@ lmbda = params.lambda;
 switch rxn_method
     case "BV"
         out = - k0.*(1-c).*(c./(1-c)).^alpha.*(-alpha*exp(-alpha*eta)-...
-            (1-alpha)*exp((1-alpha)*eta));
+            (1-alpha)*exp((1-alpha)*eta)).*(tanh(-((abs(eta))-6))+1)/2;
     case "Marcus"
         %Marcus model
         out = k0.*((exp(-(etaf + lmbda).^2./(4.*lmbda)).*(2.*etaf + 2.*lmbda)) ...
@@ -291,10 +291,10 @@ switch rxn_method
     case "CIET"
         %temporary
         out = k0.*(1-c).*...
-            (-dhelper_fundetaf(-etaf, lmbda) - c.*dhelper_fundetaf(etaf, lmbda));
+            (dhelper_fundetaf(-etaf, lmbda) - c.*dhelper_fundetaf(etaf, lmbda)) ...
+            -(k0.*(1-c).*helper_fun(etaf, params.lambda)+ Rxn_val./(1-c))./dmudc(c, params);
 end
 end
-
 
 
 function out = Rinv(mures, c, control_value, k0, rxn_method, params)
@@ -344,7 +344,7 @@ elseif params.order == -1
 elseif params.order == -2
     %this is MHC
     di = dideta(c_grid, mures, k0, ...
-        rxn_method, params).';
+        rxn_method, params, Rxn_array).';
     out = 1./params.R_grid_1*1./(1-omega.*di-omega.^2.*0.5.*(di.^2+d2ideta2(c_grid, mures, k0, ...
         rxn_method, params).'));
 end
@@ -381,7 +381,7 @@ lmbda = params.lambda;
 switch rxn_method
     case "BV"
         out = -k0.*(exp(-eta.*(alpha - 1)).*(alpha - 1).^2 - alpha.^2 ...
-        .*exp(-alpha.*eta)).*(c - 1).*(-c./(c - 1)).^alpha;
+        .*exp(-alpha.*eta)).*(c - 1).*(-c./(c - 1)).^alpha.*(tanh(-((abs(eta))-6))+1)/2;
     case "Marcus"
         %Marcus model
         out = k0.*(c - 1).*(exp(-(etaf + lmbda).^2./(4*lmbda))./(2.*lmbda) ...
@@ -437,11 +437,11 @@ domegadt = domegadt./params.IC1DR.';
 %next, get the diffusion equations
 %W = Wfunc(params, Rxn_array, eta, omega);
 W = Wfunc(params, Rxn_array, eta, omega, params.c_grid_1, mures, rxn_params.k0, params.rxn_method);
-if isa(W,'casadi.MX') || isa(W,'casadi.SX')
-    W = if_else(W<0,0,W);
-else
-    W(W<0) = 0;
-end
+%if isa(W,'casadi.MX') || isa(W,'casadi.SX')
+%    W = if_else(W<0,0,W);
+%else
+%    W(W<0) = 0;
+%end
 %remove the indexes that are insanely large
 % W = W.*reshape(repmat(indexes,1,params.N)',params.NM,1);
 %for numerical efficiency, where f is very small, we can drop the W terms
@@ -456,7 +456,6 @@ F_c = pad_2D(F_c,params.N-1,params.M,"c");
 df_dt = -diff_2D(F_c,params.N+1,params.M,params.delta_c);
 
 %df_dt = check_dfdt(df_dt, params);
-df_dt = df_dt.*params.keep_values;
 
 df_dt = [df_dt; domegadt];
 
@@ -532,8 +531,8 @@ IC1DR = gaussian1D(params.R_array, params.avg_R, params.sigma_R);
 %for numerical efficiency, we don't renormalize IC1DR until later.
 % sumR = trapz(params.delta_R, IC1DR);
 % IC1DR = IC1DR/sumR;
-sumR = 5e4;
-%sumR = max(IC1DR);
+sumR = 5e2;
+%sumR = 1e10;
 IC1DR = IC1DR/sumR;
 IC = gaussian(params.c_grid, params.R_grid, params.c0, params.sigma_c, params.avg_R, params.sigma_R);
 %IC = IC/(sumR*sumc);
@@ -626,7 +625,6 @@ switch params.protocol
         sol_total.y = [];
         times_charge = [];
         times_discharge = [];
-        params.keep_values = ones(params.NM, 1);
         
         muresguess1 = 0;
         muresguess2 = 20;
@@ -654,16 +652,13 @@ switch params.protocol
             %[mures,~,exitflag,~] = fsolve(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess1, options);
             [mures,~,exitflag,~] = fzero(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess1);
             % dfdt = dfdt_voltage(0, IC, mures, params, rxn_params);
-            muresguess1 = mures;
+           % muresguess1 = mures;
             IC = [IC; mures];
-
-            %check IC value and change params accordingly
-            params.keep_values = check_IC(IC, params, rxn_params);
 
             % create a fast version of the dfdt function and Jacobian in casadi
             addpath('~/codes/casadi')
             import casadi.*
-            xsym    = SX.sym('x',[length(IC),1]);
+            xsym    = SX.sym('x',length(IC));
             tsym    = SX.sym('t',1);
             % Get the symbolic model equations
             df_tot = dfdt_current(0,xsym,params,rxn_params);
@@ -681,28 +676,26 @@ switch params.protocol
                     'RelTol', 1e-8, 'AbsTol', 1e-8);
             else
                 opts = odeset('Mass', M_mat, 'Jacobian', jacobian_fast, ...
-                    'RelTol', 1e-7, 'AbsTol', 1e-7, 'Events', @(t,y) bounceEvents(t, y, params));
-             %       'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params));
+                    'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params));
             end   
            
-           % tic()
-           % sol = ode15s(@(t,f) dfdt_current_fast(t,f), [0,final_t], IC, opts);
-           % toc()
+            tic()
+            sol = ode15s(@(t,f) dfdt_current_fast(t,f), [0,final_t], IC, opts);
+            toc()
 
-            % implicit
-             if ~params.voltage_cutoffs
-                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                     'RelTol', 1e-8, 'AbsTol', 1e-8);
-             else
-                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                     'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
-          %           'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
-             end
- 
-             df=dfdt_current_fast(0,IC);
-             tic()
-             sol = ode15i(@(t,f,df) dfdt_current_fast(t,f) - M_mat*df, [0,final_t], IC, df, opts);
-             toc()
+%            % implicit
+%             if ~params.voltage_cutoffs
+%                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
+%                     'RelTol', 1e-8, 'AbsTol', 1e-8);
+%             else
+%                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
+%                     'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
+%             end
+% 
+%             df=dfdt_current_fast(0,IC);
+%             tic()
+%             sol = ode15i(@(t,f,df) dfdt_current_fast(t,f) - M_mat*df, [0,final_t], IC, df, opts);
+%             toc()
 %             tic()
 %             sol = ode15s(@(t,f) dfdt_current(t,f,params,rxn_params), [0,final_t], IC, opts);
 %             toc()
@@ -717,19 +710,6 @@ switch params.protocol
             
             params.control_value = -abs(params.control_value);
             % need a new function since the parameters changed
-
-            mures0 = fmincon(@(mures) Rinv(mures, params.c0, params.control_value,...
-               rxn_params.k0, params.rxn_method, params), muresguess2);
-            %find mures that gives consistent IC
-            %interpolate to find the value that is 0 or closest to 0
-            
-            %[mures,~,exitflag,~] = fsolve(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess2, options);
-            [mures,~,exitflag,~] = fzero(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess2);
-            muresguess2 = mures;
-            IC = [IC; mures];
-            %check IC value and change params accordingly
-            params.keep_values = check_IC(IC, params, rxn_params);
-
             % Get the symbolic model equations
             df_tot = dfdt_current(0,xsym,params,rxn_params);
         
@@ -745,21 +725,36 @@ switch params.protocol
                     'RelTol', 1e-8, 'AbsTol', 1e-8);
             else
                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                    'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
-            %        'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
+                    'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
             end
 
-
-            df=dfdt_current_fast(0,IC);
-            tic()
-            sol = ode15i(@(t,f,df) dfdt_current_fast(t,f) - M_mat*df, [0,final_t], IC, df, opts);
-            toc()
-%             tic()
-%             sol = ode15s(@(t,f) dfdt_current_fast(t,f), [0,final_t], IC, opts);
-%             toc()
-%             tic()
-%             sol = ode15s(@(t,f) dfdt_current(t,f,params,rxn_params), [0,final_t], IC, opts);
-%             toc()
+            mures0 = fmincon(@(mures) Rinv(mures, params.c0, params.control_value,...
+               rxn_params.k0, params.rxn_method, params), muresguess2);
+            %find mures that gives consistent IC
+            %interpolate to find the value that is 0 or closest to 0
+            
+            %[mures,~,exitflag,~] = fsolve(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess2, options);
+            [mures,~,exitflag,~] = fzero(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess2);
+         %   muresguess2 = mures;
+            IC = [IC; mures];
+            if ~params.voltage_cutoffs
+                opts = odeset('Mass', M_mat, 'Jacobian', jacobian_fast, ...
+                    'RelTol', 1e-8, 'AbsTol', 1e-8);
+            else
+                opts = odeset('Mass', M_mat, 'Jacobian', jacobian_fast, ...
+                    'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params));
+            end   
+ 
+%            df=dfdt_current_fast(0,IC);
+%            tic()
+%            sol = ode15i(@(t,f,df) dfdt_current_fast(t,f) - M_mat*df, [0,final_t], IC, df, opts);
+%            toc()
+             tic()
+             sol = ode15s(@(t,f) dfdt_current_fast(t,f), [0,final_t], IC, opts);
+             toc()
+%            tic()
+%            sol = ode15s(@(t,f) dfdt_current(t,f,params,rxn_params), [0,final_t], IC, opts);
+%            toc()
             times_discharge = [times_discharge, sol.x(end)];
             t_array = linspace(0,sol.x(end),num_times);
             y = deval(sol,t_array);
@@ -937,30 +932,8 @@ end
 function dfdt_reshape = check_dfdt(dfdt, params)
 %turn off all the max values
 dfdt_reshape = reshape(dfdt, params.N, params.M); %reshape to check max value in each
-x = 1-any(abs(dfdt_reshape) > 1)
+x = 1-any(abs(dfdt_reshape) > 1);
 dfdt_reshape = dfdt_reshape.*x;
 dfdt_reshape = reshape(dfdt_reshape, params.NM, 1); %reshape to check max value in each
 end
 
-
-%function x = check_IC(IC, params, rxn_params)
-%%turn off all the max values
-%dfdt = dfdt_current(0, IC, params, rxn_params);
-%dfdt = dfdt(1:params.NM);
-%dfdt_reshape = reshape(dfdt, params.N, params.M); %reshape to check max value in each
-%x = 1-any(abs(dfdt_reshape) > 1);
-%x = reshape(ones(size(dfdt_reshape)).*x, params.NM, 1);
-%end
-
-
-function values = check_IC(IC, params, rxn_params)
-dfdt = dfdt_current(0,IC,params,rxn_params);
-dfdt = dfdt(1:params.NM); 
-dfdt_reshape = reshape(dfdt, params.N, params.M); %reshape to check max value in each
-[B, I] = sort(max(abs(dfdt_reshape))); %sort in ascending order
-inds = find(B(2:end)./B(1:end-1) > 10);  
-get_inds = I(end-inds+1:end)
-values = ones(params.N,params.M);
-values(:,get_inds) = 0;
-values = reshape(values,params.NM,1);
-end
