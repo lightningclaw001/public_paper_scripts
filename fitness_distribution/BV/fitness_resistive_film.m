@@ -19,8 +19,13 @@ params.final_t = 2;
 %set radius dicretization
 %initial concentration
 params.c0 = 0.45;
+%discretization of concentration
 params.delta_c = 0.002;
+%discretization of particle radius
 params.delta_R = 10e-9;
+%generate arrays with the discretizations used
+%for NMC, we use the range of 0.35-1 for concentrations because lower
+%concentrations are generally not used
 params.c_array = params.delta_c+0.35:params.delta_c:1-params.delta_c;
 params.R_array = 10e-9:params.delta_R:300e-9;
 %nondimensionalize
@@ -30,12 +35,17 @@ params.num_cycles = 500;
 params.R_array = params.R_array/100e-9;
 %set 0.1 as the reference concentration
 params.muR_ref = 0;
+%charge e
 params.e = 1.602e-19;
+%thermal voltage in J
 params.kBT = 298*1.381e-23;
-params.lambda = 3.78; %units of kBT. Zhang et al 2021
+%reorganization energy of NMC
+params.lambda = 3.78; %units of kBT. Zhang et al 2022
+%set reference value of chemical potential
 params.muR_ref = -mu_c(params.c0, params);
-%find the reference OCV value for the 
+%set the cutoff voltage value to be 4.1V
 params.V_res = -params.e/params.kBT*4.1 + params.muR_ref;
+%nondimensionalize the particle size
 params.delta_r = params.delta_R/100e-9;
 %we need to recenter everything at the middle reaction rate
 [c_grid, R_grid] = meshgrid(params.c_array, params.R_array);
@@ -50,25 +60,34 @@ params.R_grid_1 = params.R_grid(:);
 params.N = length(params.c_array);
 params.M = length(params.R_array);
 params.NM = params.N*params.M;
+% standard deviation of concentration
 params.sigma_c = 0.02;
 %params.sigma_R = 10e-9;
+%standard deviation of particle radius (m)
 params.sigma_R = 100e-9;
+%average particle radius (m)
 params.avg_R = 100e-9;
 %params.beta = 50;
+% beta is the resistivity parameter for resistive film (Omega/C)
 params.beta = 300;
 %params.beta = 1;
+%nondimensionalize the size and standard deviation
 params.avg_R = params.avg_R/100e-9;
 params.sigma_R = params.sigma_R/100e-9;
 %params.order = 1;
+%set the Wfunc value that we use
 params.order = 3;
 
+%set the cutoff order (depends on Wfunc)
 params.cutoff = 2;
 
 %set voltage cutoffs
 %if we're using voltage cutoffs
 params.voltage_cutoffs = true(1);
+%upper and lower cutoffs for voltage
 params.upper_volt = -params.e/params.kBT*4.1 + params.muR_ref;
 params.lower_volt = -params.e/params.kBT*3.7 + params.muR_ref;
+%max and min capacities
 params.cap_res_high = 0.95;
 params.cap_res_low = 0.2;
 
@@ -79,9 +98,12 @@ rxn_params = {};
 rxn_params.D0 = 5e-2;
 %rxn_params.D0 = 1e-2;
 %rxn_params.k0 = 25/50;
+%exchange current density (A/m^2)
 rxn_params.k0 = 10;
 % rxn_params.k0_res = 0.1e-4
-rxn_params.k0_res = 1e-4;
+%exchange current density of degradation reaction(A/m^2)
+rxn_params.k0_res = 4e-5;
+%charge transfer coefficient
 rxn_params.alpha = 0.5;
 
 
@@ -222,7 +244,7 @@ switch rxn_method
     case "BV"
         %using the transition state rxn model
         rxn = k_array.*(1-c).*(c./(1-c)).^alpha.*(exp(-alpha*eta)-...
-            exp((1-alpha)*eta)).*(tanh(-((abs(eta))-10))+1)/2;
+            exp((1-alpha)*eta)).*(tanh(-((abs(eta))-6))+1)/2;
         if isa(eta,'casadi.MX') || isa(eta,'casadi.SX')
             eta = if_else(eta==0,1e-16,eta);
         else
@@ -258,12 +280,14 @@ end
 
 
 function out = helper_fun(eta_f, lmbda)
+%helper function for CIET equation
 out = (sqrt(pi*lmbda)./(1+exp(-eta_f)).*...
     (1-erf((lmbda-sqrt(1+sqrt(lmbda)+eta_f.^2))./(2*sqrt(lmbda)))));
 end
 
 
 function out = dhelper_fundetaf(eta_f, lmbda)
+%derivative of helper function for CIET equation wrt eta_f
 out = (eta_f.*exp(-(lmbda - (eta_f.^2 + lmbda^(1/2) + 1).^(1/2)).^2./(4*lmbda)))...
     ./((exp(-eta_f) + 1).*(eta_f.^2 + lmbda^(1/2) + 1).^(1/2)) - ...
     (lmbda^(1/2)*pi^(1/2)*exp(-eta_f).*(erf((lmbda - ...
@@ -271,6 +295,7 @@ out = (eta_f.*exp(-(lmbda - (eta_f.^2 + lmbda^(1/2) + 1).^(1/2)).^2./(4*lmbda)))
 end
 
 function out = d2helper_fundetaf2(eta_f, lmbda)
+%second derivative of helper function for CIET equation
 out = exp(-(lmbda - (eta_f.^2 + lmbda.^(1/2) + 1).^(1/2)).^2./(4*lmbda))./...
     ((exp(-eta_f) + 1).*(eta_f.^2 + lmbda.^(1/2) + 1).^(1/2)) + ...
     (3991211251234741*lmbda.^(1/2).*exp(-eta_f).*(erf((lmbda - (eta_f.^2 + ...
@@ -291,6 +316,7 @@ end
 
 
 function out = dideta(c_grid, mures, k0, rxn_method, params)
+%dideta for different reaction models
 alpha = 0.5;
 c = c_grid.';
 muh = mu_c(c_grid, params).';
@@ -316,6 +342,7 @@ end
 
 
 function out = d2ideta2(c_grid, mures, k0, rxn_method, params)
+%d2ideta2 derivative for equation
 alpha = 0.5;
 c = c_grid.';
 muh = mu_c(c_grid, params).';
@@ -343,12 +370,14 @@ end
 
 
 function out = Rinv(mures, c, control_value, k0, rxn_method, params)
+%inverts reaction model so that we have a good intiial guess for the initial condition
 [~, rxn, ~] = R(c,mures,k0,rxn_method,params);
 out = abs(rxn-control_value);
 end
 
 
 function out = sum_2D(x_array, y_array, params)
+%sum over concentration
 out = zeros(params.M,1);
 for i = 1:params.M
     %out(i) = trapz(x_array((i-1)*params.N+1:i*params.N), y_array((i-1)*params.N+1:i*params.N));
@@ -364,30 +393,36 @@ end
 
 
 function out = Wfunc(params, Rxn_array, eta, omega, c_grid, mures, k0, rxn_method)
+%fitness value for different orders of the model and reaction rate
 if params.order == 0
+    %BV order 0
     out = 1./params.R_grid_1;
 elseif params.order == 1
+    %BV order 1
     out = (1+0.5*Rxn_array.'.*coth(0.5*eta.').*omega)./params.R_grid_1;
 elseif params.order == 2
+    %BV order 2
     out = (1+0.5*Rxn_array.'.*coth(0.5*eta.').*omega + ...
         (0.5*Rxn_array.').^2/2.*omega.^2)./params.R_grid_1;
 elseif params.order == 3
+    %BV order 3
     out = (1+0.5*Rxn_array.'.*coth(0.5*eta.').*omega + ...
         (0.5*Rxn_array.').^2/2.*omega.^2 + ...
         (0.5*Rxn_array.').^3/6.*coth(0.5*eta.').*omega.^3 ...
-        )./params.R_grid_1; 
+        )./params.R_grid_1;
 elseif params.order == 5
+    %BV order 5
     out = (1+0.5*Rxn_array.'.*coth(0.5*eta.').*omega + ...
         (0.5*Rxn_array.').^2/2.*omega.^2 + ...
         (0.5*Rxn_array.').^3/6.*coth(0.5*eta.').*omega.^3 ...
         +(0.5*Rxn_array.').^4/24.*omega.^4 ... 
         +(0.5*Rxn_array.').^5/120.*coth(0.5*eta.').*omega.^5)./params.R_grid_1; 
 elseif params.order == -1
-    %this is MHC
+    %this is CIET order 1
     out = 1./params.R_grid_1*1./(1-omega.*dideta(c_grid, mures, k0, ...
         rxn_method, params).');
 elseif params.order == -2
-    %this is MHC
+    %this is CIET order 2
     out = 1./params.R_grid_1*1./(1-omega.*dideta(c_grid, mures, k0, ...
         rxn_method, params).' - omega.^2.*0.5.*(dideta(c_grid, mures, k0, ...
         rxn_method, params).^2.'+ d2ideta2(c_grid, mures, k0, ...
@@ -413,7 +448,7 @@ omega = y(params.NM+1:params.NM+params.M);
 %reshape and stack into NM from
 omega = reshape(repmat(omega,1,params.N)',params.NM,1);
 
-% first, test for the terms that are blowing up
+% first, find dXdt for degradation variable
 [k_array, Rxn_array, eta] = R(params.c_grid_1, mures, rxn_params.k0, ...
     params.rxn_method, params);
 y_array = R_resistance(mures, Rxn_array.', omega, rxn_params.k0_res, ...
@@ -458,8 +493,6 @@ F_c = pad_2D(F_c,params.N-1,params.M,"c");
 %set final equation
 % df_dt(1:params.NM,1) = -diff_2D(F_c,params.N+1,params.M,params.delta_c);
 df_dt = -diff_2D(F_c,params.N+1,params.M,params.delta_c);
-
-df_dt = check_dfdt(df_dt, params);
 
 df_dt = [df_dt; domegadt];
 
@@ -536,8 +569,8 @@ IC1DR = gaussian1D(params.R_array, params.avg_R, params.sigma_R);
 % sumR = trapz(params.delta_R, IC1DR);
 % IC1DR = IC1DR/sumR;
 %sumR = 5e4;
-%sumR = 5e4;
-sumR = 1;
+sumR = 5e4;
+%sumR = 1;
 IC1DR = IC1DR/sumR;
 IC = gaussian(params.c_grid, params.R_grid, params.c0, params.sigma_c, params.avg_R, params.sigma_R);
 %IC = IC/(sumR*sumc);
@@ -694,9 +727,10 @@ switch params.protocol
                      'RelTol', 1e-8, 'AbsTol', 1e-8);
              else
                  opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                     'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
+                     'RelTol', 1e-9, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
              end
- 
+
+             %solve equation! 
              df=dfdt_current_fast(0,IC);
              tic()
              sol = ode15i(@(t,f,df) dfdt_current_fast(t,f) - M_mat*df, [0,final_t], IC, df, opts);
@@ -705,6 +739,7 @@ switch params.protocol
 %             sol = ode15s(@(t,f) dfdt_current(t,f,params,rxn_params), [0,final_t], IC, opts);
 %             toc()
 
+            %store variable
             times_charge = [times_charge, sol.x(end)];
             t_array = linspace(0,sol.x(end),num_times);
             y = deval(sol,t_array);
@@ -730,7 +765,7 @@ switch params.protocol
                     'RelTol', 1e-9, 'AbsTol', 1e-8);
             else
                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                    'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
+                    'RelTol', 1e-9, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
             end
 
             mures0 = fmincon(@(mures) Rinv(mures, params.c0, params.control_value,...
@@ -743,6 +778,7 @@ switch params.protocol
             muresguess2 = mures;
             IC = [IC; mures];
             df=dfdt_current_fast(0,IC);
+            %solve equation! 
             tic()
             sol = ode15i(@(t,f,df) dfdt_current_fast(t,f) - M_mat*df, [0,final_t], IC, df, opts);
             toc()
@@ -752,6 +788,7 @@ switch params.protocol
 %             tic()
 %             sol = ode15s(@(t,f) dfdt_current(t,f,params,rxn_params), [0,final_t], IC, opts);
 %             toc()
+            %store variables
             times_discharge = [times_discharge, sol.x(end)];
             t_array = linspace(0,sol.x(end),num_times);
             y = deval(sol,t_array);

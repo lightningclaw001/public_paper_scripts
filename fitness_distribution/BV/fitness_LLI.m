@@ -265,7 +265,7 @@ function [k_array, rxn, eta] = R_LLI(c_grid, c_lyte, mures, k0, rxn_method, para
 alpha = 0.5;
 %get overpotential
 muh = mu_c(c_grid, params).';
-eta = muh-mures;
+eta = muh-mures + log(1./c_lyte);
 %for simplicity in calculation
 c = c_grid.';
 etaf = eta - log(c./c_lyte);

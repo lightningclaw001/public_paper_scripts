@@ -2,6 +2,8 @@ clc;clearvars
 
 maxNumCompThreads(1);
 
+%check BV/fitness_resistive_film.m for variable definitions
+
 %create input params
 params = {};
 %can be set to current or voltage for CC/CV
@@ -26,7 +28,7 @@ params.R_array = 10e-9:params.delta_R:300e-9;
 %nondimensionalize
 %params.num_cycles = 24;
 %params.num_cycles = 1;
-params.num_cycles = 100;
+params.num_cycles = 400;
 params.R_array = params.R_array/100e-9;
 %set 0.1 as the reference concentration
 params.muR_ref = 0;
@@ -81,7 +83,7 @@ rxn_params.D0 = 5e-2;
 %rxn_params.k0 = 25/50;
 rxn_params.k0 = 10;
 % rxn_params.k0_res = 0.1e-4
-rxn_params.k0_res = 0.002;
+rxn_params.k0_res = 0.03;
 rxn_params.alpha = 0.5;
 
 
@@ -223,7 +225,7 @@ switch rxn_method
     case "BV"
         %using the transition state rxn model
         rxn = k_array.*(1-c).*(c./(1-c)).^alpha.*(exp(-alpha*eta)-...
-            exp((1-alpha)*eta)).*(tanh(-((abs(eta))-6))+1)/2;
+            exp((1-alpha)*eta));
         if isa(eta,'casadi.MX') || isa(eta,'casadi.SX')
             eta = if_else(eta==0,1e-16,eta);
         else
@@ -258,7 +260,7 @@ end
 
 
 
-function [k_array, rxn, eta] = R_new(c_grid, mures, v, k0, rxn_method, params)
+function rxn = R_new(c_grid, mures, v, k0, rxn_method, params)
 %R is dc/dt, from the population balance equation. can be BV or linear
 %set symmetry coefs
 alpha = 0.5;
@@ -276,37 +278,22 @@ switch rxn_method
         %using the transition state rxn model
         rxn = k_array.*(v.'-c).*(c./(v.'-c)).^alpha.*(exp(-alpha*eta)-...
             exp((1-alpha)*eta)).*(tanh(-((abs(eta))-8))+1)/2;
-        if isa(eta,'casadi.MX') || isa(eta,'casadi.SX')
-            eta = if_else(eta==0,1e-16,eta);
-        else
-            eta(eta==0) = 1e-16;
-        end
-
-        k_array = rxn./(-eta);
     case "Marcus"
         lmbda = params.lambda;
         %Marcus model
         rxn = k_array.*(v.'-c).*((exp(-power(lmbda+etaf,2)./(4*lmbda))) ...
           - (c.*exp(-power(lmbda-etaf,2)./(4*lmbda))));
-        if isa(eta,'casadi.MX') || isa(eta,'casadi.SX')
-            eta = if_else(eta==0,1e-16,eta);
-        else
-            eta(eta==0) = 1e-16;
-        end
-
-        k_array = rxn./(-eta);
     case "CIET"
         %temperoary
         i_red = helper_fun(-etaf, params.lambda);
         i_ox = helper_fun(etaf, params.lambda);
         rxn = k_array.*(v.'-c).*(i_red - c.*i_ox);
-        if isa(eta,'casadi.MX') || isa(eta,'casadi.SX')
-            eta = if_else(eta==0,1e-16,eta);
-        else
-            eta(eta==0) = 1e-16;
-        end
-
-        k_array = rxn./(-eta);
+end
+prefac = v.'-c;
+if isa(prefac,'casadi.MX') || isa(prefac,'casadi.SX')
+    rxn = if_else(prefac<0,0,rxn);
+else
+    rxn(prefac<0) = 0;
 end
 end
 
@@ -338,7 +325,7 @@ etaf = eta - log(c);
 lmbda = params.lambda;
 switch rxn_method
     case "BV"
-        out = - k0.*(1-c).*(c./(1-c)).^alpha.*(-alpha*exp(-alpha*eta)-...
+        out = k0.*(1-c).*(c./(1-c)).^alpha.*(-alpha*exp(-alpha*eta)-...
             (1-alpha)*exp((1-alpha)*eta));
     case "Marcus"
         %Marcus model
@@ -348,7 +335,7 @@ switch rxn_method
     case "CIET"
         %temporary
         out = k0.*(1-c).*...
-            (-dhelper_fundetaf(-etaf, lmbda) - c.*dhelper_fundetaf(etaf, lmbda));
+            (dhelper_fundetaf(-etaf, lmbda) - c.*dhelper_fundetaf(etaf, lmbda));
 end
 end
 
@@ -394,8 +381,8 @@ etaf = eta - log(c);
 lmbda = params.lambda;
 switch rxn_method
     case "BV"
-        out = - k0.*(-alpha*exp(-alpha*eta)-...
-            (1-alpha)*exp((1-alpha)*eta));
+        out = k0.*(-alpha*exp(-alpha*eta)-...
+            (1-alpha)*exp((1-alpha)*eta)).*(tanh(-((abs(eta))-8))+1)/2;
     case "Marcus"
         %Marcus model
         out = - k0.*((exp(-(etaf + lmbda).^2./(4.*lmbda)).*(2.*etaf + 2.*lmbda)) ...
@@ -404,7 +391,7 @@ switch rxn_method
     case "CIET"
         %temporary
         out = k0.*...
-            (-dhelper_fundetaf(-etaf, lmbda) - c.*dhelper_fundetaf(etaf, lmbda));
+            (dhelper_fundetaf(-etaf, lmbda) - c.*dhelper_fundetaf(etaf, lmbda));
 end
 end
 
@@ -562,9 +549,9 @@ v = y(params.NM+1:params.NM+params.M);
 v = reshape(repmat(v,1,params.N)',params.NM,1);
 
 % first, test for the terms that are blowing up
-%[k_array, Rxn_array, eta] = R(params.c_grid_1, mures, rxn_params.k0, ...
-%    params.rxn_method, params);
-[k_array, Rxn_total, eta] = R_new(params.c_grid_1, mures, v, rxn_params.k0, ...
+[k_array, Rxn_array, eta] = R(params.c_grid_1, mures, rxn_params.k0, ...
+    params.rxn_method, params);
+Rxn_total = R_new(params.c_grid_1, mures, v, rxn_params.k0, ...
     params.rxn_method, params);
 % if isa(Rxn_total,'casadi.MX') || isa(Rxn_total,'casadi.SX')
 %     Rxn_total = if_else(abs(Rxn_total) < 1e-3<0,sign(Rxn_total),Rxn_total);
@@ -692,7 +679,7 @@ IC1DR = gaussian1D(params.R_array, params.avg_R, params.sigma_R);
 %for numerical efficiency, we don't renormalize IC1DR until later.
 % sumR = trapz(params.delta_R, IC1DR);
 % IC1DR = IC1DR/sumR;
-sumR = 1e6;
+sumR = 5e4;
 %sumR = 1e9;
 IC1DR = IC1DR/sumR;
 IC = gaussian(params.c_grid, params.R_grid, params.c0, params.sigma_c, params.avg_R, params.sigma_R);
@@ -767,14 +754,14 @@ switch params.protocol
         M_mat(NM+M+1,1:NM) = params.c_grid_1.*params.vfrac; % for the intercalation current
         %now we add in the degradation current
         M_mat(NM+M+1,NM+1:NM+M) = [params.delta_R/2, params.delta_R*ones(1,M-2), params.delta_R/2].*...
-            params.R_array.^2.*IC1DR./params.beta./total_vol;
+            params.R_array.^2.*IC1DR./total_vol;
         
         %padding for the edges being 1/2 the value of the central values
 %        M_mat(NM+M+1,NM+1:NM+M) = 1/(params.beta*params.R_array); % for the intercalation current
         M_mat(NM+M+1,NM+M+1) = 0;
 
         %find initial guess of mures
-        options = optimset('Display','on','TolX',1e-10,'TolFun',1e-10);
+        options = optimset('Display','on','TolX',1e-7,'TolFun',1e-7);
 
         %we only charge up to 1 for constant current
         final_t = params.final_t;
@@ -807,11 +794,11 @@ switch params.protocol
 % lets try to cycle 
             params.control_value = abs(params.control_value);
             mures0 = fmincon(@(mures) Rinv(mures, params.c0, params.control_value,...
-                rxn_params.k0, params.rxn_method, params),muresguess1);
+                rxn_params.k0, params.rxn_method, params),0);
             %find mures that gives consistent IC
             %interpolate to find the value that is 0 or closest to 0
             %[mures,~,exitflag,~] = fsolve(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess1, options);
-            [mures,~,exitflag,~] = fzero(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), mures0, options);
+            [mures,~,exitflag,~] = fzero(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), mures0);
             % dfdt = dfdt_voltage(0, IC, mures, params, rxn_params);
             muresguess1 = mures;
             IC = [IC; mures];
@@ -819,7 +806,7 @@ switch params.protocol
             % create a fast version of the dfdt function and Jacobian in casadi
             addpath('~/codes/casadi')
             import casadi.*
-            xsym    = SX.sym('x',[length(IC),1]);
+            xsym    = SX.sym('x',length(IC));
             tsym    = SX.sym('t',1);
             % Get the symbolic model equations
             df_tot = dfdt_current(0,xsym,params,rxn_params);
@@ -840,9 +827,9 @@ switch params.protocol
                     'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params));
             end   
            
-           % tic()
-           % sol = ode15s(@(t,f) dfdt_current_fast(t,f), [0,final_t], IC, opts);
-           % toc()
+%            tic()
+%            sol = ode15s(@(t,f) dfdt_current_fast(t,f), [0,final_t], IC, opts);
+%            toc()
 
             % implicit
              if ~params.voltage_cutoffs
@@ -850,7 +837,7 @@ switch params.protocol
                      'RelTol', 1e-8, 'AbsTol', 1e-8);
              else
                  opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                     'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
+                     'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
              end
  
              df=dfdt_current_fast(0,IC);
@@ -874,13 +861,14 @@ switch params.protocol
             % need a new function since the parameters changed
             % Get the symbolic model equations
             
-            if ~params.voltage_cutoffs
-                opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                    'RelTol', 1e-8, 'AbsTol', 1e-8);
-            else
-                opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
-                    'RelTol', 1e-8, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
-            end
+           % if ~params.voltage_cutoffs
+           %     opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
+           %         'RelTol', 1e-8, 'AbsTol', 1e-8);
+           % else
+           %     opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
+           %         'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
+
+           % end
 
             mures0 = fmincon(@(mures) Rinv(mures, 0.9, params.control_value,...
                rxn_params.k0, params.rxn_method, params), muresguess2);
@@ -888,11 +876,11 @@ switch params.protocol
             %interpolate to find the value that is 0 or closest to 0
             
             %[mures,~,exitflag,~] = fsolve(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), muresguess2, options);
-            [mures,~,exitflag,~] = fzero(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), mures0, options);
+            [mures,~,exitflag,~] = fzero(@(mures) solve_mures(mures, IC, params, rxn_params, M_mat), mures0);
             muresguess2 = mures;
             IC = [IC; mures];
             
-            xsym    = SX.sym('x',[length(IC),1]);
+            xsym    = SX.sym('x',length(IC));
             tsym    = SX.sym('t',1);
             % Get the symbolic model equations
             df_tot = dfdt_current(0,xsym,params,rxn_params);
@@ -905,7 +893,23 @@ switch params.protocol
             jacobian_tmp = Function('fJ',{tsym, xsym}, {J});
             jacobian_fast = @(t,x) sparse(jacobian_tmp(t,x));
 
-    
+            if ~params.voltage_cutoffs
+                opts = odeset('Mass', M_mat, 'Jacobian', jacobian_fast, ...
+                    'RelTol', 1e-8, 'AbsTol', 1e-8);
+            else
+                opts = odeset('Mass', M_mat, 'Jacobian', jacobian_fast, ...
+                    'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y) bounceEvents(t, y, params));
+            end   
+ 
+            % implicit
+             if ~params.voltage_cutoffs
+                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
+                     'RelTol', 1e-8, 'AbsTol', 1e-8);
+             else
+                 opts = odeset('Mass', M_mat, 'MassSingular', 'yes', 'Jacobian', @(t,u,du) jac_implicit(t,u,du,jacobian_fast,M_mat), ...
+                     'RelTol', 1e-7, 'AbsTol', 1e-8, 'Events', @(t,y,yp) bounceEvents(t, y, yp, params));
+             end
+ 
             df=dfdt_current_fast(0,IC);
             tic()
             sol = ode15i(@(t,f,df) dfdt_current_fast(t,f) - M_mat*df, [0,final_t], IC, df, opts);
